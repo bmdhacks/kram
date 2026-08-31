@@ -157,4 +157,10 @@ target_include_directories(${myTargetApp} PRIVATE
 
 target_sources(${myTargetApp} PRIVATE ${appSources})
 
-
+if (BUILD_LINUX AND BUILD_TESTING)
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    if (Python3_Interpreter_FOUND)
+        add_test(NAME kram_astc_mip_tests
+            COMMAND ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/../tests/kram_astc_mip_tests.py $<TARGET_FILE:kram>)
+    endif()
+endif()

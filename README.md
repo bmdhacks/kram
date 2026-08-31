@@ -428,8 +428,8 @@ kram[encode | decode | info | script | ...]
 Usage: kram encode
 	 -f/ormat (bc1 | astc4x4 | etc2rgba | rgba16f)
 	 [-srgb] [-signed] [-normal]
-	 -i/nput <source.png | .ktx>
-	 -o/utput <target.ktx | .ktxa>
+	 -i/nput <source.png | .dds | .ktx | .ktx2>
+	 -o/utput <target.dds | .ktx | .ktx2>
 
 	 [-type 2d|3d|..]
 	 [-e/ncoder (squish | ate | etcenc | bcenc | astcenc | explicit | ..)]
@@ -437,6 +437,7 @@ Usage: kram encode
 
 	 [-mipnone]
 	 [-mipmin size] [-mipmax size]
+	 [-mip level file] (repeat for levels 1..n)
 
 	 [-chunks 4x4]
 	 [-swizzle rg01]
@@ -470,6 +471,11 @@ OPTIONS
 	-mipnone	Don't build mips even if pow2 dimensions
 	-mipmin size	Only output mips >= size px
 	-mipmax size	Only output mips <= size px
+	-mip level file	Encode an explicit mip level from an independent image.
+			Level 0 is the -i source.  Levels must be contiguous
+			(1..n) and match the halved dimensions of the base.
+			Generation, resize, chunking, swizzle, sdf, and premul
+			options are rejected in this mode.
 
 	-srgb	sRGB for rgb/rgba formats
 	-signed	Signed r or rg for etc/bc formats, astc doesn't have signed format.
@@ -686,4 +692,3 @@ kram will soon offer an atlas mode that uses ES3-level 2d array textures.  These
 The idea is to copy all atlased images to a 2d vertical strip.  This makes row-byte handling simpler.  Then kram can already convert a vertical strip to a 2D array, and the output rectangle, array index, mip range, and altas names are tracked as well.  But there is some subtlety to copy smaller textures to the smaller mips and use sampler mip clamping.  Non-pow2 textures will have transparent fill around the sides.
 
 Apps like Substance Painter use charts of unwrapped UV.  These need to be gapped and aligned to block sizes to avoid the problems above.  Often times the gap is too small (1px) for the mipchain, and instead the algorithms cover up the issue by dilating colors into the gutter regions, so that black outlines are not visible.  thelka_atlas, xatlas, and other utilities can build these charts.
-

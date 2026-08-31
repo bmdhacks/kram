@@ -47,6 +47,7 @@ if (BUILD_LINUX)
     SET (CMAKE_C_COMPILER "/usr/bin/clang" CACHE STRING "C compiler" FORCE)
 
     project(${myTargetWorkspace} LANGUAGES C CXX)
+    include(CTest)
 
     # want to only use clang across all platforms
     message(STATUS "Using ${CMAKE_CXX_COMPILER_ID} compiler")
@@ -155,7 +156,6 @@ if (BUILD_MAC)
 #    install(TARGETS kram-ps BUNDLE DESTINATION ${BIN_DIR})
 
 endif()
-
 
 
 

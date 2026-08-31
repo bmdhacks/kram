@@ -51,13 +51,13 @@ public:
 
     int32_t mipMinSize = 1;
     int32_t mipMaxSize = 32 * 1024;
-    int32_t mipSkip = 0;
-
-    int32_t quality = 49; // may want float
+    int32_t mipSkip = 0; // count of skipped mips
 
     // ktx2 has a compression type and level
     KTX2Compressor compressor;
     bool isKTX2 = false;
+
+    int32_t quality = 49; // may want float
 
     bool doMipmaps = true; // default to mips on
     bool doMipflood = false;
@@ -194,6 +194,9 @@ public:
     int32_t mipMinSize = 1;
     int32_t mipMaxSize = 32 * 1024;
     int32_t mipSkip = 0; // count of large mips to skip
+
+    // Caller owns the explicit levels; they must remain alive through encode().
+    const vector<class Image>* explicitMips = nullptr;
 
     int32_t chunksX = 0;
     int32_t chunksY = 0;

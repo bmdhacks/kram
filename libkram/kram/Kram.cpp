@@ -345,6 +345,77 @@ bool SetupSourceKTX(KTXImageData& srcImageData,
     return true;
 }
 
+// declared below, used by LoadExplicitMipSource
+bool SetupSourceImage(const string& srcFilename, Image& sourceImage,
+                      bool isPremulSrgb, bool isGray);
+
+// Load one explicit mip source file (png/ktx/ktx2/dds) into an Image,
+// normalized to top-down orientation.  Rejects files with embedded
+// mip chains and HDR content, which explicit chains don't support.
+static bool LoadExplicitMipSource(const string& srcFilename, Image& srcImage)
+{
+    if (isPNGFilename(srcFilename)) {
+        return SetupSourceImage(srcFilename, srcImage, false, false);
+    }
+
+    KTXImageData srcImageData;
+    KTXImage srcImageKTX;
+    if (!SetupSourceKTX(srcImageData, srcFilename, srcImageKTX, false)) {
+        return false;
+    }
+
+    if (srcImageKTX.mipLevels.size() > 1) {
+        KLOGE("Kram", "explicit mip source \"%s\" contains embedded mips",
+              srcFilename.c_str());
+        return false;
+    }
+
+    if (srcImageKTX.textureType != MyMTLTextureType2D) {
+        KLOGE("Kram", "explicit mip source \"%s\" is not a 2D texture",
+              srcFilename.c_str());
+        return false;
+    }
+
+    if (isBlockFormat(srcImageKTX.pixelFormat)) {
+        KTXImage decodedImage;
+        KramDecoderParams decoderParams;
+        KramDecoder decoder;
+
+        if (!decoder.decode(srcImageKTX, decodedImage, decoderParams)) {
+            KLOGE("Kram", "failed to decode explicit mip source %s",
+                  srcFilename.c_str());
+            return false;
+        }
+        if (!srcImage.loadImageFromKTX(decodedImage)) {
+            return false;
+        }
+    }
+    else {
+        if (!srcImage.loadImageFromKTX(srcImageKTX)) {
+            return false;
+        }
+    }
+
+    if (!srcImage.pixelsFloat().empty()) {
+        KLOGE("Kram", "explicit mip source \"%s\" is HDR, but explicit chains are LDR only",
+              srcFilename.c_str());
+        return false;
+    }
+
+    // normalize bottom-up sources to top-down
+    const string orientation = srcImageKTX.getProp("KTXorientation");
+    if (!orientation.empty() && orientation != "S=r,T=d" && orientation != "S=r,T=u") {
+        KLOGE("Kram", "explicit mip source \"%s\" has unsupported orientation %s",
+              srcFilename.c_str(), orientation.c_str());
+        return false;
+    }
+    if (orientation == "S=r,T=u") {
+        srcImage.flipVertical();
+    }
+
+    return true;
+}
+
 // Twiddle pixels or blocks into Morton order.  Usually this is done during the upload of
 // linear-order block textures.  But on some platforms may be able to directly use the block
 // and pixel data if organized in the exact twiddle order the hw uses.
@@ -1737,6 +1808,7 @@ void kramEncodeUsage(bool showVersion = true)
           "\n"
           "\t [-mipnone] [-mipflood]\n"
           "\t [-mipmin size] [-mipmax size] [-mipskip count]\n"
+          "\t [-mip level file] (repeat for explicit levels 1..n)\n"
           "\n"
           "\t [-chunks 4x4]\n"
           "\t [-swizzle rg01]\n"
@@ -2707,6 +2779,9 @@ static int32_t kramAppEncode(vector<const char*>& args)
     string dstFilename;
     string resizeString;
 
+    // explicit mip level inputs: -mip <level> <file>
+    vector<pair<int32_t, string>> explicitMipArgs;
+
     ImageInfoArgs infoArgs;
 
     bool isPremulRgb = false;
@@ -2807,6 +2882,25 @@ static int32_t kramAppEncode(vector<const char*>& args)
         }
         else if (isStringEqual(word, "-mipflood")) {
             infoArgs.doMipflood = true;
+        }
+        else if (isStringEqual(word, "-mip")) {
+            // explicit mip level: -mip <level> <file>, level 0 is the -i source
+            ++i;
+            if (i + 1 >= argc) {
+                KLOGE("Kram", "-mip requires a level and a file");
+                error = true;
+                break;
+            }
+
+            int32_t mipLevel = StringToInt32(args[i]);
+            if (mipLevel < 1 || mipLevel > 15) {
+                KLOGE("Kram", "-mip level must be between 1 and 15");
+                error = true;
+                break;
+            }
+
+            explicitMipArgs.push_back({mipLevel, args[i + 1]});
+            ++i;
         }
 
         else if (isStringEqual(word, "-heightScale")) {
@@ -3131,28 +3225,118 @@ static int32_t kramAppEncode(vector<const char*>& args)
     Image srcImage;
     KTXImage srcImageKTX;
 
+    // srcImageKTX aliases data owned by this helper, so it must outlive
+    // every use of srcImageKTX below, including the pass-through save.
+    KTXImageData srcImageData;
+
     FileHelper tmpFileHelper;
 
     bool canEncodeInput = true;
     bool success = true;
-    if (isDDS) {
-        // Note: this is type KTXImage, not Image.
-
-        KTXImageData srcImageData;
+    if (isDDS || isKTX || isKTX2) {
         success = SetupSourceKTX(srcImageData, srcFilename, srcImageKTX, false);
 
         if (success) {
-            if (isBlockFormat(srcImageKTX.pixelFormat)) {
-                // can only export to dds/ktx (KTX2 would need to supercompress in Image encode path)
-                canEncodeInput = false;
+            if (!explicitMipArgs.empty() && srcImageKTX.mipLevels.size() > 1) {
+                KLOGE("Kram", "explicit mip base \"%s\" contains embedded mips", srcFilename.c_str());
+                success = false;
+            }
+        }
 
-                if (isDstKTX2) {
-                    KLOGE("Kram", "encode can only export dds import to ktx, dds");
+        if (success) {
+            if ((isBlockFormat(srcImageKTX.pixelFormat) || !explicitMipArgs.empty()) &&
+                srcImageKTX.textureType != MyMTLTextureType2D) {
+                KLOGE("Kram", "compressed transcode and explicit mip inputs require a 2D source");
+                success = false;
+            }
+        }
+
+        if (success) {
+            if (isBlockFormat(srcImageKTX.pixelFormat)) {
+                // Pass the compressed data through unchanged only for a pure
+                // same-format container conversion with no pixel-domain
+                // operations and a compatible orientation.  Otherwise the
+                // requested destination format and operations would be
+                // silently ignored, so decode to pixels and take the normal
+                // encode path instead.
+                bool isSameFormat = (info.pixelFormat == srcImageKTX.pixelFormat);
+                bool hasPixelOps =
+                    !info.swizzleText.empty() || !info.averageChannels.empty() ||
+                    info.isNormal || info.isHeight || info.doSDF ||
+                    info.doMipflood || !info.doMipmaps ||
+                    info.isPremultiplied || info.isPrezero || info.isSourcePremultiplied ||
+                    info.chunksX > 0 || info.chunksY > 0 || info.chunksCount > 0 ||
+                    info.mipMinSize != 1 || info.mipMaxSize != 32 * 1024 || info.mipSkip != 0 ||
+                    infoArgs.isSRGBSrc || infoArgs.isSRGBSrcFlag || isPremulRgb || isGray ||
+                    infoArgs.optimizeFormatForOpaque || !resizeString.empty() || !explicitMipArgs.empty();
+
+                // Compressed data cannot be reoriented by copying.  DDS has no
+                // orientation metadata and is top-down by convention.
+                string srcOrientation = srcImageKTX.getProp("KTXorientation");
+                if (srcOrientation.empty()) {
+                    srcOrientation = "S=r,T=d";
+                }
+                else if (srcOrientation != "S=r,T=d" && srcOrientation != "S=r,T=u") {
+                    KLOGE("Kram", "unsupported source orientation %s", srcOrientation.c_str());
                     success = false;
+                }
+                string dstOrientation = (info.textureOrientation == kTextureOrientationOpenGL)
+                                            ? "S=r,T=u"
+                                            : "S=r,T=d";
+                bool isOrientationCompatible = (srcOrientation == dstOrientation);
+
+                if (success && isSameFormat && !hasPixelOps && isOrientationCompatible && !isDstKTX2) {
+                    // Copy unchanged blocks only when the destination container
+                    // can store them directly. KTX2 uses the regular encode path
+                    // so its supercompression and level layout are rebuilt.
+                    canEncodeInput = false;
+
+                    // DDS sources carry no orientation metadata, so label the
+                    // KTX output with the requested orientation.  Sources that
+                    // already had a compatible prop are left untouched.
+                    if (success && isDstKTX && srcImageKTX.getProp("KTXorientation").empty()) {
+                        srcImageKTX.addProp("KTXorientation", dstOrientation.c_str());
+                    }
+                }
+                else if (success) {
+                    // Decode the compressed blocks to pixels, then re-encode
+                    // into the requested destination format.  The common
+                    // orientation flip below only converts top-down sources,
+                    // so flip here when the source itself is bottom-up.
+                    KTXImage decodedImage;
+                    KramDecoderParams decoderParams;
+                    KramDecoder decoder;
+
+                    success = decoder.decode(srcImageKTX, decodedImage, decoderParams);
+                    if (success) {
+                        success = srcImage.loadImageFromKTX(decodedImage);
+                    }
+                    if (success) {
+                        if (srcOrientation == "S=r,T=u") {
+                            srcImage.flipVertical();
+                        }
+
+                        if (srcImageKTX.mipLevels.size() > 1) {
+                            KLOGW("Kram", "transcoding mipmapped source from the base level; mips are only rebuilt with -mipgen or explicit mip inputs");
+                        }
+                    }
+                    else {
+                        KLOGE("Kram", "failed to decode compressed source for transcode");
+                    }
                 }
             }
             else {
                 success = srcImage.loadImageFromKTX(srcImageKTX);
+                if (success && !explicitMipArgs.empty()) {
+                    const string srcOrientation = srcImageKTX.getProp("KTXorientation");
+                    if (!srcOrientation.empty() && srcOrientation != "S=r,T=d" && srcOrientation != "S=r,T=u") {
+                        KLOGE("Kram", "unsupported explicit mip base orientation %s", srcOrientation.c_str());
+                        success = false;
+                    }
+                    else if (srcOrientation == "S=r,T=u") {
+                        srcImage.flipVertical();
+                    }
+                }
             }
         }
     }
@@ -3162,6 +3346,102 @@ static int32_t kramAppEncode(vector<const char*>& args)
     
     if (success && infoArgs.textureOrientation == kTextureOrientationOpenGL) {
         srcImage.flipVertical();
+    }
+
+    // Load and validate explicit mip levels.  Level 0 is the -i source;
+    // levels 1..n must form a contiguous halved chain.
+    vector<Image> explicitMipImages;
+    if (success && !explicitMipArgs.empty()) {
+        // options whose semantics are undefined for an explicit chain
+        bool hasUnsupportedOps =
+            info.doSDF || info.doMipflood ||
+            !resizeString.empty() ||
+            !info.averageChannels.empty() || !info.swizzleText.empty() ||
+            info.isNormal || info.isHeight ||
+            info.isPremultiplied || info.isPrezero || info.isSourcePremultiplied ||
+            info.chunksX > 0 || info.chunksY > 0 || info.chunksCount > 0 ||
+            !info.doMipmaps ||
+            info.mipMinSize != 1 || info.mipMaxSize != 32 * 1024 || info.mipSkip != 0 ||
+            infoArgs.isSRGBSrc || infoArgs.isSRGBSrcFlag ||
+            infoArgs.isHDR || infoArgs.optimizeFormatForOpaque ||
+            isPremulRgb || isGray ||
+            infoArgs.textureType != MyMTLTextureType2D ||
+            infoArgs.textureOrientation != kTextureOrientationDirectX;
+        if (hasUnsupportedOps) {
+            KLOGE("Kram", "explicit mips require a direct 2D LDR chain without resize, chunking, pixel operations, or mip range options");
+            success = false;
+        }
+
+        // Source and destination must both use the LDR pixel path.
+        if (success && (!srcImage.pixelsFloat().empty() || isHalfFormat(info.pixelFormat) || isFloatFormat(info.pixelFormat))) {
+            KLOGE("Kram", "explicit mips require LDR source and destination formats");
+            success = false;
+        }
+
+        // levels must be contiguous 1..n with no duplicates
+        if (success) {
+            vector<int32_t> levels;
+            for (auto& arg : explicitMipArgs) {
+                levels.push_back(arg.first);
+            }
+            sort(levels.begin(), levels.end());
+            for (size_t i = 0; i < levels.size(); ++i) {
+                if (levels[i] != (int32_t)(i + 1)) {
+                    KLOGE("Kram", "explicit mip levels must be contiguous starting at 1 (got level %d at index %zu)",
+                          levels[i], i);
+                    success = false;
+                    break;
+                }
+            }
+        }
+
+        // load each level and check dimensions against the base
+        if (success) {
+            // sort inputs by level so encoding order matches mip order
+            sort(explicitMipArgs.begin(), explicitMipArgs.end());
+
+            explicitMipImages.resize(explicitMipArgs.size());
+
+            for (size_t i = 0; i < explicitMipArgs.size(); ++i) {
+                int32_t mipLevel = explicitMipArgs[i].first;
+                const string& filename = explicitMipArgs[i].second;
+
+                if (!LoadExplicitMipSource(filename, explicitMipImages[i])) {
+                    success = false;
+                    break;
+                }
+
+                Image& mipImage = explicitMipImages[i];
+
+                int32_t ew = max(1, srcImage.width() >> mipLevel);
+                int32_t eh = max(1, srcImage.height() >> mipLevel);
+                if ((int32_t)mipImage.width() != ew || (int32_t)mipImage.height() != eh) {
+                    KLOGE("Kram", "explicit mip %d is %ux%u, but expected %dx%d",
+                          mipLevel, mipImage.width(), mipImage.height(), ew, eh);
+                    success = false;
+                    break;
+                }
+            }
+        }
+
+        // a level past 1x1 is geometrically meaningless
+        if (success) {
+            int32_t k = 0;
+            while ((srcImage.width() >> k) > 1 || (srcImage.height() >> (k)) > 1) {
+                ++k;
+            }
+            // k is now the level where both dims first reach 1x1
+            if ((int32_t)explicitMipArgs.size() > k) {
+                KLOGE("Kram", "explicit mip %d is past the 1x1 level %d",
+                      (int32_t)explicitMipArgs.size(), k);
+                success = false;
+            }
+        }
+
+        // hand the chain to the encoder
+        if (success) {
+            info.explicitMips = &explicitMipImages;
+        }
     }
 
     if (success) {

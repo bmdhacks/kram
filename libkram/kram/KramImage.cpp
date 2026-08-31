@@ -1593,6 +1593,17 @@ bool KramEncoder::encodeImpl(ImageInfo& info, Image& singleImage, FILE* dstFile,
         return false;
     }
 
+    // explicit chain: encode exactly the supplied levels, no generated tail
+    if (info.explicitMips && !info.explicitMips->empty()) {
+        int32_t explicitCount = (int32_t)info.explicitMips->size() + 1;
+        if ((int32_t)dstImage.mipLevels.size() < explicitCount) {
+            KLOGE("kram", "explicit mip chain exceeds the geometric mip count");
+            return false;
+        }
+        dstImage.mipLevels.resize(explicitCount);
+        dstImage.header.numberOfMipmapLevels = (uint32_t)explicitCount;
+    }
+
     addBaseProps(info, dstImage);
 
     if (info.isKTX2 && dstFile) {
@@ -2239,7 +2250,26 @@ bool KramEncoder::createMipsFromChunks(
 
             int32_t numSkippedMips = data.numSkippedMips;
 
-            if (info.doSDF) {
+            if (info.explicitMips && !info.explicitMips->empty()) {
+                // explicit chain: level 0 from the source image, levels 1..n
+                // from the supplied images.  Validation guaranteed LDR,
+                // single-chunk, and matching dimensions, so just point the
+                // per-level ImageData at each image's pixels.
+                for (int32_t mipLevel = 0; mipLevel < numMipLevels; ++mipLevel) {
+                    const Image& src = (mipLevel == 0)
+                                           ? singleImage
+                                           : (*info.explicitMips)[mipLevel - 1];
+
+                    ImageData& dstMipImage = dstMipImages[mipLevel];
+                    dstMipImage = dstImageData;
+                    dstMipImage.pixels = (Color*)src.pixels().data();
+                    dstMipImage.pixelsHalf = nullptr;
+                    dstMipImage.pixelsFloat = nullptr;
+                    dstMipImage.width = src.width();
+                    dstMipImage.height = src.height();
+                }
+            }
+            else if (info.doSDF) {
                 // count up pixels needed for all mips of this chunk
                 uint32_t numPixels = 0;
                 for (int32_t mipLevel = 0; mipLevel < numMipLevels; ++mipLevel) {
