@@ -1603,6 +1603,11 @@ bool KramEncoder::encodeImpl(ImageInfo& info, Image& singleImage, FILE* dstFile,
         dstImage.mipLevels.resize(explicitCount);
         dstImage.header.numberOfMipmapLevels = (uint32_t)explicitCount;
     }
+    else if (info.mipCountLimit > 0 && (int32_t)dstImage.mipLevels.size() > info.mipCountLimit) {
+        // cap generated chains (e.g. a runtime seven-level limit)
+        dstImage.mipLevels.resize(info.mipCountLimit);
+        dstImage.header.numberOfMipmapLevels = (uint32_t)info.mipCountLimit;
+    }
 
     addBaseProps(info, dstImage);
 

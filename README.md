@@ -469,6 +469,7 @@ OPTIONS
 	-encoder explicit	r|rg|rgba[8|16f|32f]
 
 	-mipnone	Don't build mips even if pow2 dimensions
+	-mipcount N	Cap generated mip chains at N levels (0 = unlimited)
 	-mipmin size	Only output mips >= size px
 	-mipmax size	Only output mips <= size px
 	-mip level file	Encode an explicit mip level from an independent image.

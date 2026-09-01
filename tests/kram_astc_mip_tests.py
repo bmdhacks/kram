@@ -164,6 +164,12 @@ def main():
         if explicit_format != ASTC_6X6 or [(w, h) for w, h, _ in explicit_levels] != [(17, 13), (8, 6), (4, 3)]:
             raise AssertionError("explicit chain did not preserve its three supplied levels")
 
+        capped = temp / "capped.ktx"
+        run(kram, ["encode", "-i", str(bc3), "-f", "astc6x6", "-mipcount", "2", "-o", str(capped)])
+        capped_format, capped_levels = parse_ktx(capped)
+        if capped_format != ASTC_6X6 or [(w, h) for w, h, _ in capped_levels] != [(17, 13), (8, 6)]:
+            raise AssertionError(f"-mipcount 2 produced {[(w, h) for w, h, _ in capped_levels]}")
+
         decoded = temp / "decoded.ktx"
         run(kram, ["decode", "-i", str(explicit), "-o", str(decoded)])
         _, decoded_levels = parse_ktx(decoded)

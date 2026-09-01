@@ -2876,6 +2876,22 @@ static int32_t kramAppEncode(vector<const char*>& args)
                 break;
             }
         }
+        else if (isStringEqual(word, "-mipcount")) {
+            // cap generated chains at N levels (runtime seven-level limit)
+            ++i;
+            if (i >= argc || infoArgs.mipCountLimit != 0) {
+                KLOGE("Kram", "mipcount arg invalid");
+                error = true;
+                break;
+            }
+
+            infoArgs.mipCountLimit = StringToInt32(args[i]);
+            if (infoArgs.mipCountLimit < 1 || infoArgs.mipCountLimit > 16) {
+                KLOGE("Kram", "mipcount arg invalid");
+                error = true;
+                break;
+            }
+        }
         else if (isStringEqual(word, "-mipnone")) {
             // disable mips even if pow2
             infoArgs.doMipmaps = false;
@@ -3267,6 +3283,7 @@ static int32_t kramAppEncode(vector<const char*>& args)
                     info.isPremultiplied || info.isPrezero || info.isSourcePremultiplied ||
                     info.chunksX > 0 || info.chunksY > 0 || info.chunksCount > 0 ||
                     info.mipMinSize != 1 || info.mipMaxSize != 32 * 1024 || info.mipSkip != 0 ||
+                    info.mipCountLimit != 0 ||
                     infoArgs.isSRGBSrc || infoArgs.isSRGBSrcFlag || isPremulRgb || isGray ||
                     infoArgs.optimizeFormatForOpaque || !resizeString.empty() || !explicitMipArgs.empty();
 
@@ -3362,6 +3379,7 @@ static int32_t kramAppEncode(vector<const char*>& args)
             info.chunksX > 0 || info.chunksY > 0 || info.chunksCount > 0 ||
             !info.doMipmaps ||
             info.mipMinSize != 1 || info.mipMaxSize != 32 * 1024 || info.mipSkip != 0 ||
+            info.mipCountLimit != 0 ||
             infoArgs.isSRGBSrc || infoArgs.isSRGBSrcFlag ||
             infoArgs.isHDR || infoArgs.optimizeFormatForOpaque ||
             isPremulRgb || isGray ||

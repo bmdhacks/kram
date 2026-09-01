@@ -52,6 +52,7 @@ public:
     int32_t mipMinSize = 1;
     int32_t mipMaxSize = 32 * 1024;
     int32_t mipSkip = 0; // count of skipped mips
+    int32_t mipCountLimit = 0; // cap generated chains at N levels (0 = unlimited)
 
     // ktx2 has a compression type and level
     KTX2Compressor compressor;
@@ -194,6 +195,7 @@ public:
     int32_t mipMinSize = 1;
     int32_t mipMaxSize = 32 * 1024;
     int32_t mipSkip = 0; // count of large mips to skip
+    int32_t mipCountLimit = 0; // cap generated chains at N levels (0 = unlimited)
 
     // Caller owns the explicit levels; they must remain alive through encode().
     const vector<class Image>* explicitMips = nullptr;

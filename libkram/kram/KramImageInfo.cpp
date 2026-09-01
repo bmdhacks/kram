@@ -1058,6 +1058,7 @@ void ImageInfo::initWithArgs(const ImageInfoArgs& args)
     mipMinSize = args.mipMinSize;
     mipMaxSize = args.mipMaxSize;
     mipSkip = args.mipSkip;
+    mipCountLimit = args.mipCountLimit;
     swizzleText = args.swizzleText;
     averageChannels = args.averageChannels;
 
