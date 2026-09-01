@@ -378,6 +378,15 @@ bool DDSHelper::load(const uint8_t* data, size_t dataSize, KTXImage& image, bool
 
     // make sure to copy mips/slices from DDS array-ordered to mip-ordered for KTX
     uint32_t width = (hdr.flags & DDSD_WIDTH) ? hdr.width : 1;
+
+    // 32-bit DDS with R=0x00ff0000/G=0x0000ff00/B=0x000000ff/A=0xff000000 stores
+    // pixels as B,G,R,A bytes (DirectXTex maps this mask set to B8G8R8A8).  The
+    // format maps to RGBA8Unorm above, so swap B and R while copying or every
+    // red-dominant texture comes out blue.
+    bool isBGRAByteOrder =
+        !isDDS10 && (format.flags & DDSPF_RGB) && format.RGBBitCount == 32 &&
+        format.RBitMask == 0x00ff0000 && format.GBitMask == 0x0000ff00 &&
+        format.BBitMask == 0x000000ff && format.ABitMask == 0xff000000;
     uint32_t height = (hdr.flags & DDSD_HEIGHT) ? hdr.height : 1;
     uint32_t depth = (hdr.flags & DDSD_DEPTH) ? hdr.depth : 1;
 
@@ -559,6 +568,25 @@ bool DDSHelper::load(const uint8_t* data, size_t dataSize, KTXImage& image, bool
                     }
 
                     srcOffset += srcMipLength;
+                } else if (isBGRAByteOrder) {
+                    if ((mipDataOffset + srcOffset + mipLength) > dataSize) {
+                        KLOGE("kram", "source image data incomplete");
+                        return false;
+                    }
+
+                    const uint8_t* srcPixel = srcImageData + srcOffset;
+                    uint8_t* dstPixel = dstImageData + dstOffset;
+                    size_t pixelCount = mipLength / 4;
+                    for (size_t i = 0; i < pixelCount; ++i) {
+                        dstPixel[0] = srcPixel[2];
+                        dstPixel[1] = srcPixel[1];
+                        dstPixel[2] = srcPixel[0];
+                        dstPixel[3] = srcPixel[3];
+                        srcPixel += 4;
+                        dstPixel += 4;
+                    }
+
+                    srcOffset += mipLength;
                 } else {
                     // Standard path for other formats - direct memcpy
                     if ((mipDataOffset + srcOffset + mipLength) > dataSize) {

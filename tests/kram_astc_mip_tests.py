@@ -218,5 +218,51 @@ def main():
             raise AssertionError("truncated transcode left an output file")
 
 
+def write_bgra_dds(path, w, h, rgba):
+    """Uncompressed 32-bit DDS with the ARGB8888 mask set (pixels stored B,G,R,A)."""
+    import struct
+
+    header = struct.pack(
+        "<4s7I11I2I4s5I5I",
+        b"DDS ", 124,
+        0x41 | 0x1000,  # caps | height/width
+        h, w,
+        0, 0, 1,
+        *(0,) * 11,  # reserved1
+        32, 0x41,  # pixelformat size, DDSPF_ALPHAPIXELS | DDSPF_RGB
+        b"\0\0\0\0", 32,
+        0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000,  # R,G,B,A masks (BGRA byte order)
+        0x1000, 0, 0, 0, 0,  # caps, caps2-4, reserved2
+    )
+    r, g, b, a = rgba
+    pixels = bytes((b, g, r, a)) * (w * h)
+    path.write_bytes(header + pixels)
+
+
+def test_bgra_dds_source(kram, temp):
+    """Red-dominant BGRA-byte-order DDS must encode and decode red-dominant."""
+    base = temp / "bgra.dds"
+    write_bgra_dds(base, 16, 16, (200, 30, 20, 255))
+    encoded = temp / "bgra.ktx"
+    run(kram, ["encode", "-i", str(base), "-f", "astc6x6", "-mipnone", "-o", str(encoded)])
+    decoded = temp / "bgra-decoded.ktx"
+    run(kram, ["decode", "-i", str(encoded), "-o", str(decoded)])
+
+    data = decoded.read_bytes()
+    offset = 64 + int.from_bytes(data[60:64], "little")
+    size = int.from_bytes(data[offset:offset + 4], "little")
+    px = data[offset + 4:offset + 4 + size]
+    count = size // 4
+    mean_r = sum(px[i * 4 + 0] for i in range(count)) / count
+    mean_b = sum(px[i * 4 + 2] for i in range(count)) / count
+    if mean_r < 150 or mean_b > 60:
+        raise AssertionError(f"BGRA-byte-order DDS decode is swapped: R={mean_r:.0f} B={mean_b:.0f}")
+
+
 if __name__ == "__main__":
+    import contextlib
+
+    with tempfile.TemporaryDirectory(prefix="kram-astc-mips-") as _temp:
+        _kram = pathlib.Path(sys.argv[1]).resolve()
+        test_bgra_dds_source(_kram, pathlib.Path(_temp))
     main()
