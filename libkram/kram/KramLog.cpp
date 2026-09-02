@@ -513,7 +513,13 @@ bool endsWithExtension(const char* str, const string& substring)
         return false;
     }
 
-    return strcmp(search, substring.c_str()) == 0;
+    // Extension matching must be case-insensitive; packs ship files with
+    // .PNG/.Png/.DDS/... and uppercase extensions are otherwise rejected.
+#if KRAM_WIN
+    return _stricmp(search, substring.c_str()) == 0;
+#else
+    return strcasecmp(search, substring.c_str()) == 0;
+#endif
 }
 
 //----------------------------------
