@@ -365,9 +365,22 @@ static bool LoadExplicitMipSource(const string& srcFilename, Image& srcImage)
     }
 
     if (srcImageKTX.mipLevels.size() > 1) {
-        KLOGE("Kram", "explicit mip source \"%s\" contains embedded mips",
+        // Sidecar level files are dumper output and often carry their own
+        // embedded chains; only level 0 of a sidecar is meaningful (it IS the
+        // level), so rebase onto that payload.
+        KLOGI("Kram", "explicit mip source \"%s\" embedded mips are dropped",
               srcFilename.c_str());
-        return false;
+
+        const KTXImageLevel& srcLevel = srcImageKTX.mipLevels[0];
+        vector<uint8_t> levelData(srcLevel.length);
+        memcpy(levelData.data(), srcImageKTX.fileData + srcLevel.offset,
+               srcLevel.length);
+
+        srcImageKTX.imageData() = std::move(levelData);
+        srcImageKTX.fileData = srcImageKTX.imageData().data();
+        srcImageKTX.fileDataLength = (int32_t)srcImageKTX.imageData().size();
+        srcImageKTX.header.numberOfMipmapLevels = 1;
+        srcImageKTX.initMipLevels(0);
     }
 
     if (srcImageKTX.textureType != MyMTLTextureType2D) {
@@ -3252,11 +3265,26 @@ static int32_t kramAppEncode(vector<const char*>& args)
     if (isDDS || isKTX || isKTX2) {
         success = SetupSourceKTX(srcImageData, srcFilename, srcImageKTX, false);
 
-        if (success) {
-            if (!explicitMipArgs.empty() && srcImageKTX.mipLevels.size() > 1) {
-                KLOGE("Kram", "explicit mip base \"%s\" contains embedded mips", srcFilename.c_str());
-                success = false;
-            }
+        // Explicit mip inputs are the authoritative chain: level 0 comes from
+        // the -i source and supplied levels replace any embedded ones. Packs
+        // commonly ship a mip-chained base alongside sidecar levels (dumper
+        // output does both), so keep only level 0 of the base rather than
+        // failing the encode.
+        if (success && !explicitMipArgs.empty() && srcImageKTX.mipLevels.size() > 1) {
+            KLOGI("Kram", "explicit mip inputs supersede the %d embedded mips in \"%s\"",
+                  (int)srcImageKTX.mipLevels.size(), srcFilename.c_str());
+
+            const KTXImageLevel& srcLevel = srcImageKTX.mipLevels[0];
+            vector<uint8_t> levelData(srcLevel.length);
+            memcpy(levelData.data(),
+                   srcImageKTX.fileData + srcLevel.offset, srcLevel.length);
+
+            // Rebase the container onto the copied level-0 payload.
+            srcImageKTX.imageData() = std::move(levelData);
+            srcImageKTX.fileData = srcImageKTX.imageData().data();
+            srcImageKTX.fileDataLength = (int32_t)srcImageKTX.imageData().size();
+            srcImageKTX.header.numberOfMipmapLevels = 1;
+            srcImageKTX.initMipLevels(0);
         }
 
         if (success) {

@@ -192,10 +192,15 @@ def main():
             kram,
             ["encode", "-i", str(transcoded), "-mip", "1", str(mip1),
              "-f", "astc6x6", "-o", str(embedded_output)],
-            False,
         )
-        if embedded_output.exists():
-            raise AssertionError("explicit encode accepted a base with embedded mips")
+        # A mip-chained base alongside explicit levels is dumper-style output:
+        # the explicit chain is authoritative and only level 0 of the base is
+        # used. The result must carry exactly the supplied levels.
+        embedded_format, embedded_levels = parse_ktx(embedded_output)
+        if embedded_format != ASTC_6X6 or [(w, h) for w, h, _ in embedded_levels] != [
+                (17, 13), (8, 6)]:
+            raise AssertionError(
+                f"explicit encode over an embedded-mip base produced {[(w, h) for w, h, _ in embedded_levels]}")
 
         for name, args in (
             ("float-destination", ["-f", "rgba16f"]),
