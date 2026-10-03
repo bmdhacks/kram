@@ -3179,8 +3179,10 @@ bool KramEncoder::compressMipLevel(const ImageInfo& info, KTXImage& image,
                                              ASTCENC_SWZ_B, ASTCENC_SWZ_A};
 
             // could this be built once, and reused across all mips
-            // Use multiple threads for ASTC encoding, targeting quad-core systems
-            constexpr int thread_count = 4;
+            // Threads per image, set by -j. Clamp to something sane.
+            int32_t thread_count = info.astcThreadCount;
+            if (thread_count < 1) thread_count = 1;
+            if (thread_count > 16) thread_count = 16;
             astcenc_context* codec_context = nullptr;
             error = astcenc_context_alloc(&config, thread_count, &codec_context);
             if (error != ASTCENC_SUCCESS) {

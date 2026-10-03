@@ -1817,6 +1817,7 @@ void kramEncodeUsage(bool showVersion = true)
           "\n"
           "\t [-type 2d|3d|..]\n"
           "\t [-e/ncoder (squish | ate | etcenc | bcenc | astcenc | explicit | ..)]\n"
+          "\t [-j/obs count] (threads per image for astcenc, default 4)\n"
           "\t [-resize (16x32 | pow2)]\n"
           "\n"
           "\t [-mipnone] [-mipflood]\n"
@@ -3041,6 +3042,17 @@ static int32_t kramAppEncode(vector<const char*>& args)
             }
 
             infoArgs.quality = StringToInt32(args[i]);
+        }
+        else if (isStringEqual(word, "-j") ||
+                 isStringEqual(word, "-jobs")) {
+            ++i;
+            if (i >= argc) {
+                KLOGE("Kram", "jobs arg invalid");
+                error = true;
+                break;
+            }
+
+            infoArgs.astcThreadCount = StringToInt32(args[i]);
         }
 
         else if (isStringEqual(word, "-output") ||

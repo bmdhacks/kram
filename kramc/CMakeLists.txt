@@ -41,9 +41,11 @@ endif()
 if (BUILD_MAC)
     # ate is a macOS/iOS only library, and it varies in encode support by OS revision
     target_link_libraries(${myTargetApp} PUBLIC
-        ate
         libkram
     )
+    if (ATE)
+        target_link_libraries(${myTargetApp} PUBLIC ate)
+    endif()
 
     set_target_properties(${myTargetApp} PROPERTIES
         #XCODE_ATTRIBUTE_CLANG_CXX_LANGUAGE_STANDARD "c++20"

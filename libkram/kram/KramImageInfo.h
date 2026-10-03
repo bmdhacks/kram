@@ -60,6 +60,9 @@ public:
 
     int32_t quality = 49; // may want float
 
+    // threads astcenc uses per image; -j on the CLI
+    int32_t astcThreadCount = 4;
+
     bool doMipmaps = true; // default to mips on
     bool doMipflood = false;
     bool isVerbose = false;
@@ -191,6 +194,7 @@ public:
     TextureOrientation textureOrientation = kTextureOrientationDirectX;
 
     int32_t quality = 49;
+    int32_t astcThreadCount = 4;
 
     int32_t mipMinSize = 1;
     int32_t mipMaxSize = 32 * 1024;

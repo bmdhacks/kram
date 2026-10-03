@@ -8,6 +8,10 @@ set(BUILD_MAC FALSE)
 set(BUILD_WIN FALSE)
 set(BUILD_LINUX FALSE)
 
+# macOS cmake build can skip the viewer/plugin/parser (they need metal tooling
+# and are not needed to produce the kram CLI). Defaults on to match upstream.
+option(KRAM_BUILD_EXTRAS "Build kramv/plugin/hlslparser in the macOS cmake build" ON)
+
 if (APPLE)
     message(STATUS "build for macOS ${CMAKE_SYSTEM_PROCESSOR}")
     set(BUILD_MAC TRUE)
@@ -133,14 +137,16 @@ if (BUILD_MAC)
     # the CLI app for Mac/Win that can build content for other platforms, uses libkram
     add_subdirectory(kramc)
 
-    # the viewer is only written for macOS Intel/ARM currently, uses libkram
-    add_subdirectory(kramv)
+    if (KRAM_BUILD_EXTRAS)
+        # the viewer is only written for macOS Intel/ARM currently, uses libkram
+        add_subdirectory(kramv)
 
-    # ps plugin that uses libkram
-    add_subdirectory(plugin)
-  
-    # hlslparser needs some more work to modernize to a C++ style HLSL syntax
-    add_subdirectory(hlslparser)
+        # ps plugin that uses libkram
+        add_subdirectory(plugin)
+
+        # hlslparser needs some more work to modernize to a C++ style HLSL syntax
+        add_subdirectory(hlslparser)
+    endif()
 
     #-----------------------------------------------------
 
@@ -149,8 +155,10 @@ if (BUILD_MAC)
 
     install(TARGETS libkram ARCHIVE DESTINATION ${BIN_DIR})
     install(TARGETS kram RUNTIME DESTINATION ${BIN_DIR})
-	install(TARGETS kramv BUNDLE DESTINATION ${BIN_DIR})
-    install(TARGETS hlslparser RUNTIME DESTINATION ${BIN_DIR})
+    if (KRAM_BUILD_EXTRAS)
+        install(TARGETS kramv BUNDLE DESTINATION ${BIN_DIR})
+        install(TARGETS hlslparser RUNTIME DESTINATION ${BIN_DIR})
+    endif()
 
     # photoshop plugin
 #    install(TARGETS kram-ps BUNDLE DESTINATION ${BIN_DIR})
