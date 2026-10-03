@@ -46,9 +46,13 @@ set(CMAKE_DEFAULT_STARTUP_PROJECT "kramc")
 if (BUILD_LINUX)
     set(myTargetWorkspace kramWorkspace)
 
-    # don't want gcc, want clang
-    SET (CMAKE_CXX_COMPILER "/usr/bin/clang++" CACHE STRING "C++ compiler" FORCE)
-    SET (CMAKE_C_COMPILER "/usr/bin/clang" CACHE STRING "C compiler" FORCE)
+    # prefer clang, but honor a compiler passed via -DCMAKE_*_COMPILER
+    if (NOT CMAKE_CXX_COMPILER)
+        set(CMAKE_CXX_COMPILER "clang++" CACHE STRING "C++ compiler")
+    endif()
+    if (NOT CMAKE_C_COMPILER)
+        set(CMAKE_C_COMPILER "clang" CACHE STRING "C compiler")
+    endif()
 
     project(${myTargetWorkspace} LANGUAGES C CXX)
     include(CTest)

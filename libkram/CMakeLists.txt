@@ -245,9 +245,14 @@ if (BUILD_MAC)
         -fdata-sections -ffunction-sections
     )
     
-    # Architecture-specific optimizations
-    if (CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
-        # Enable NEON for ARM64 (Apple Silicon) - NEON is mandatory on ARMv8
+    # Architecture-specific optimizations. Key off CMAKE_OSX_ARCHITECTURES when
+    # set so per-arch cross builds (universal) pick the right flags.
+    set(_kram_arch "${CMAKE_SYSTEM_PROCESSOR}")
+    if (CMAKE_OSX_ARCHITECTURES)
+        set(_kram_arch "${CMAKE_OSX_ARCHITECTURES}")
+    endif()
+    if (_kram_arch MATCHES "aarch64|arm64|ARM64")
+        # Enable NEON for ARM64 (Apple Silicon)
         target_compile_options(${myTargetLib} PRIVATE -march=armv8-a+simd)
         target_compile_definitions(${myTargetLib} PRIVATE __ARM_NEON=1 __ARM_NEON__=1)
     else()
