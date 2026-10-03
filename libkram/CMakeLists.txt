@@ -263,6 +263,10 @@ if (BUILD_MAC)
     # this is already done by pch for libkram, but other projects need the force include inherited
     # force include (public)
     target_compile_options(${myTargetLib} PUBLIC -include KramConfig.h)
+
+    # Xcode sets these via kram.xcconfig. The cmake path must too, otherwise it
+    # falls into the old float4a.h Apple-simd path and fails on modern SDKs.
+    target_compile_definitions(${myTargetLib} PUBLIC USE_SIMDLIB=1 USE_SIMDLIBMODULE=0)
 endif()
 
 if (BUILD_WIN)
