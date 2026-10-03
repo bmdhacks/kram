@@ -425,8 +425,12 @@ string vecf::simd_configs() const
 #endif
     
     FMT_CONFIG(SIMD_LIBRARY_VERSION); // lib based on min os target
+#ifdef SIMD_CURRENT_LIBRARY_VERSION
     FMT_CONFIG(SIMD_CURRENT_LIBRARY_VERSION); // max lib based on sdk
+#endif
+#ifdef SIMD_LIBRARY_VERSION_TEST
     FMT_CONFIG(SIMD_LIBRARY_VERSION_TEST);
+#endif
     FMT_CONFIG(SIMD_ACCELERATE_MATH_NAMES);
 #endif
     
