@@ -1818,6 +1818,7 @@ void kramEncodeUsage(bool showVersion = true)
           "\t [-type 2d|3d|..]\n"
           "\t [-e/ncoder (squish | ate | etcenc | bcenc | astcenc | explicit | ..)]\n"
           "\t [-j/obs count] (threads per image for astcenc, default 4)\n"
+          "\t [-alphaexact] (astcenc: flat or two-level alpha blocks decode exactly)\n"
           "\t [-resize (16x32 | pow2)]\n"
           "\n"
           "\t [-mipnone] [-mipflood]\n"
@@ -3032,6 +3033,9 @@ static int32_t kramAppEncode(vector<const char*>& args)
             }
 
             infoArgs.textureType = parseTextureType(args[i]);
+        }
+        else if (isStringEqual(word, "-alphaexact")) {
+            infoArgs.astcAlphaExact = true;
         }
         else if (isStringEqual(word, "-quality")) {
             ++i;

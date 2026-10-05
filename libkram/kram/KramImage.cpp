@@ -2463,6 +2463,217 @@ bool KramEncoder::createMipsFromChunks(
     return true;
 }
 
+#if COMPILE_ASTCENC
+// PS2 replacement textures store "opaque" as alpha 0x80. An ASTC endpoint can
+// only decode to exactly 128 at 8-bit endpoint precision, which the encoder
+// rarely picks for a 6x6 block, so flat 0x80 alpha comes back as 129-134 (and
+// two-level 0/0x80 cutouts likewise). That matters to games that alpha-test
+// against 0x80 or blend with source alpha, where 0x80 means exactly 1.0.
+//
+// After the normal encode, decode the level and find every block whose source
+// alpha has at most two distinct values (flat, or a hard cutout) but does not
+// decode to exactly those values. Re-encode just those blocks with alpha
+// weighted heavily and splice them back: ASTC blocks are independent 16-byte
+// units. Blocks with alpha gradients (anti-aliased edges) are left alone,
+// because forcing them costs far more colour than it fixes alpha.
+//
+// Returns false only on an astcenc error. Counts go to repairedBlocks and
+// unrepairedBlocks.
+static bool decodeAstcLevel(astcenc_profile profile, Int2 blockDims, int32_t w, int32_t h,
+                            const uint8_t* data, size_t dataSize, vector<Color>& out)
+{
+    astcenc_config config;
+    if (astcenc_config_init(profile, blockDims.x, blockDims.y, 1, ASTCENC_PRE_FAST,
+                            ASTCENC_FLG_DECOMPRESS_ONLY, &config) != ASTCENC_SUCCESS)
+        return false;
+    astcenc_context* context = nullptr;
+    if (astcenc_context_alloc(&config, 1, &context) != ASTCENC_SUCCESS)
+        return false;
+
+    out.resize((size_t)w * h);
+    Color* outPixels = out.data();
+    astcenc_image image;
+    image.dim_x = w;
+    image.dim_y = h;
+    image.dim_z = 1;
+    image.data_type = ASTCENC_TYPE_U8;
+    image.data = (void**)&outPixels;
+    astcenc_swizzle swizzle = {ASTCENC_SWZ_R, ASTCENC_SWZ_G, ASTCENC_SWZ_B, ASTCENC_SWZ_A};
+    astcenc_error error = astcenc_decompress_image(context, data, dataSize, &image, &swizzle, 0);
+    astcenc_context_free(context);
+    return error == ASTCENC_SUCCESS;
+}
+
+// A block fails when its source alpha takes at most two values and some texel
+// decodes to a different alpha than its source.
+static void findAlphaExactFailures(const Color* src, const Color* decoded, int32_t w, int32_t h,
+                                   Int2 blockDims, vector<int32_t>& failing)
+{
+    failing.clear();
+    int32_t bw = (w + blockDims.x - 1) / blockDims.x;
+    int32_t bh = (h + blockDims.y - 1) / blockDims.y;
+    for (int32_t by = 0; by < bh; ++by) {
+        for (int32_t bx = 0; bx < bw; ++bx) {
+            int32_t x0 = bx * blockDims.x, y0 = by * blockDims.y;
+            int32_t x1 = std::min(x0 + blockDims.x, w), y1 = std::min(y0 + blockDims.y, h);
+            int32_t values[2] = {-1, -1};
+            bool flatOrTwoLevel = true;
+            bool wrong = false;
+            for (int32_t y = y0; y < y1 && flatOrTwoLevel; ++y) {
+                for (int32_t x = x0; x < x1; ++x) {
+                    int32_t a = src[y * w + x].a;
+                    if (a != values[0] && a != values[1]) {
+                        if (values[0] < 0)
+                            values[0] = a;
+                        else if (values[1] < 0)
+                            values[1] = a;
+                        else {
+                            flatOrTwoLevel = false;
+                            break;
+                        }
+                    }
+                    if (decoded[y * w + x].a != a)
+                        wrong = true;
+                }
+            }
+            if (flatOrTwoLevel && wrong)
+                failing.push_back(by * bw + bx);
+        }
+    }
+}
+
+static bool repairAstcAlphaBlocks(const astcenc_config& baseConfig, astcenc_profile profile,
+                                  Int2 blockDims, int32_t w, int32_t h, const Color* src,
+                                  uint8_t* data, size_t dataSize,
+                                  int32_t& repairedBlocks, int32_t& unrepairedBlocks)
+{
+    repairedBlocks = 0;
+    unrepairedBlocks = 0;
+
+    vector<Color> decoded;
+    if (!decodeAstcLevel(profile, blockDims, w, h, data, dataSize, decoded))
+        return false;
+
+    vector<int32_t> failing;
+    findAlphaExactFailures(src, decoded.data(), w, h, blockDims, failing);
+    if (failing.empty())
+        return true;
+
+    const int32_t initialFailures = (int32_t)failing.size();
+    const int32_t bw = (w + blockDims.x - 1) / blockDims.x;
+
+    // Escalate the alpha weight; most blocks are fixed at the first step.
+    const float alphaWeights[] = {1000.0f, 10000.0f};
+    for (float alphaWeight : alphaWeights) {
+        if (failing.empty())
+            break;
+
+        // Lay the failing blocks out side by side in a small mosaic image.
+        // Texels past the right/bottom edge repeat the edge texel, which is
+        // what astcenc does for a partial block in the full image.
+        int32_t count = (int32_t)failing.size();
+        int32_t cols = std::min(count, 64);
+        int32_t rows = (count + cols - 1) / cols;
+        int32_t mw = cols * blockDims.x, mh = rows * blockDims.y;
+        vector<Color> mosaic((size_t)mw * mh);
+        for (int32_t i = 0; i < count; ++i) {
+            int32_t bx = failing[i] % bw, by = failing[i] / bw;
+            int32_t mx = (i % cols) * blockDims.x, my = (i / cols) * blockDims.y;
+            for (int32_t y = 0; y < blockDims.y; ++y) {
+                int32_t sy = std::min(by * blockDims.y + y, h - 1);
+                for (int32_t x = 0; x < blockDims.x; ++x) {
+                    int32_t sx = std::min(bx * blockDims.x + x, w - 1);
+                    mosaic[(size_t)(my + y) * mw + mx + x] = src[(size_t)sy * w + sx];
+                }
+            }
+        }
+
+        // Exhaustive search: only a few blocks go through here.
+        astcenc_config config;
+        if (astcenc_config_init(profile, blockDims.x, blockDims.y, 1, ASTCENC_PRE_EXHAUSTIVE,
+                                baseConfig.flags, &config) != ASTCENC_SUCCESS)
+            return false;
+        config.cw_r_weight = 1.0f;
+        config.cw_g_weight = 1.0f;
+        config.cw_b_weight = 1.0f;
+        config.cw_a_weight = alphaWeight;
+        astcenc_context* context = nullptr;
+        if (astcenc_context_alloc(&config, 1, &context) != ASTCENC_SUCCESS)
+            return false;
+
+        Color* mosaicPixels = mosaic.data();
+        astcenc_image image;
+        image.dim_x = mw;
+        image.dim_y = mh;
+        image.dim_z = 1;
+        image.data_type = ASTCENC_TYPE_U8;
+        image.data = (void**)&mosaicPixels;
+        astcenc_swizzle swizzle = {ASTCENC_SWZ_R, ASTCENC_SWZ_G, ASTCENC_SWZ_B, ASTCENC_SWZ_A};
+        vector<uint8_t> mosaicData((size_t)cols * rows * 16);
+        astcenc_error error = astcenc_compress_image(context, &image, &swizzle,
+                                                     mosaicData.data(), mosaicData.size(), 0);
+        astcenc_context_free(context);
+        if (error != ASTCENC_SUCCESS)
+            return false;
+
+        for (int32_t i = 0; i < count; ++i)
+            memcpy(data + (size_t)failing[i] * 16, mosaicData.data() + (size_t)i * 16, 16);
+
+        if (!decodeAstcLevel(profile, blockDims, w, h, data, dataSize, decoded))
+            return false;
+        findAlphaExactFailures(src, decoded.data(), w, h, blockDims, failing);
+    }
+
+    // Last resort for a flat-alpha block: a void-extent block, one constant
+    // RGBA colour (the block's mean RGB). Its 16-bit channels decode to the
+    // exact 8-bit alpha. A two-level block has no such fallback and stays
+    // counted as unrepaired.
+    if (!failing.empty()) {
+        for (int32_t index : failing) {
+            int32_t bx = index % bw, by = index / bw;
+            int32_t x0 = bx * blockDims.x, y0 = by * blockDims.y;
+            int32_t x1 = std::min(x0 + blockDims.x, w), y1 = std::min(y0 + blockDims.y, h);
+            uint32_t sum[3] = {0, 0, 0}, n = 0;
+            int32_t alpha = src[(size_t)y0 * w + x0].a;
+            bool flat = true;
+            for (int32_t y = y0; y < y1; ++y) {
+                for (int32_t x = x0; x < x1; ++x) {
+                    const Color& c = src[(size_t)y * w + x];
+                    sum[0] += c.r;
+                    sum[1] += c.g;
+                    sum[2] += c.b;
+                    ++n;
+                    if (c.a != alpha)
+                        flat = false;
+                }
+            }
+            if (!flat)
+                continue;
+            uint8_t* block = data + (size_t)index * 16;
+            // LDR void-extent header with the "no extent" coordinates.
+            const uint8_t header[8] = {0xFC, 0xFD, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+            memcpy(block, header, 8);
+            uint16_t rgba[4] = {
+                (uint16_t)(((sum[0] + n / 2) / n) * 257),
+                (uint16_t)(((sum[1] + n / 2) / n) * 257),
+                (uint16_t)(((sum[2] + n / 2) / n) * 257),
+                (uint16_t)(alpha * 257)};
+            for (int32_t c = 0; c < 4; ++c) {
+                block[8 + c * 2] = (uint8_t)(rgba[c] & 0xFF);
+                block[9 + c * 2] = (uint8_t)(rgba[c] >> 8);
+            }
+        }
+        if (!decodeAstcLevel(profile, blockDims, w, h, data, dataSize, decoded))
+            return false;
+        findAlphaExactFailures(src, decoded.data(), w, h, blockDims, failing);
+    }
+
+    unrepairedBlocks = (int32_t)failing.size();
+    repairedBlocks = initialFailures - unrepairedBlocks;
+    return true;
+}
+#endif
+
 bool KramEncoder::compressMipLevel(const ImageInfo& info, KTXImage& image,
                                    ImageData& mipImage, TextureData& outputTexture,
                                    int32_t mipStorageSize) const
@@ -3256,6 +3467,22 @@ bool KramEncoder::compressMipLevel(const ImageInfo& info, KTXImage& image,
 
             if (error != ASTCENC_SUCCESS) {
                 return false;
+            }
+
+            if (info.astcAlphaExact && !info.isHDR && channelType == kChannelTypeNormalFour) {
+                int32_t repaired = 0, unrepaired = 0;
+                if (!repairAstcAlphaBlocks(config, profile, blockDims, w, h, srcPixelData,
+                                           outputTexture.data.data(), mipStorageSize,
+                                           repaired, unrepaired)) {
+                    return false;
+                }
+                if (unrepaired > 0) {
+                    KLOGW("kram", "alphaexact: %dx%d level: %d blocks repaired, %d still inexact",
+                          w, h, repaired, unrepaired);
+                }
+                else if (info.isVerbose && repaired > 0) {
+                    KLOGI("kram", "alphaexact: %dx%d level: %d blocks repaired", w, h, repaired);
+                }
             }
             return true;
         }

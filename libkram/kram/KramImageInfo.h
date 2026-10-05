@@ -63,6 +63,10 @@ public:
     // threads astcenc uses per image; -j on the CLI
     int32_t astcThreadCount = 4;
 
+    // astcenc only: re-encode blocks whose alpha decodes to a different value
+    // than a flat or two-level source alpha; -alphaexact on the CLI
+    bool astcAlphaExact = false;
+
     bool doMipmaps = true; // default to mips on
     bool doMipflood = false;
     bool isVerbose = false;
@@ -195,6 +199,7 @@ public:
 
     int32_t quality = 49;
     int32_t astcThreadCount = 4;
+    bool astcAlphaExact = false;
 
     int32_t mipMinSize = 1;
     int32_t mipMaxSize = 32 * 1024;

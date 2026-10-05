@@ -1066,6 +1066,7 @@ void ImageInfo::initWithArgs(const ImageInfoArgs& args)
 
     quality = args.quality;
     astcThreadCount = args.astcThreadCount;
+    astcAlphaExact = args.astcAlphaExact;
 
     // this is for height to normal, will convert .r to normal xy
     isHeight = args.isHeight;
